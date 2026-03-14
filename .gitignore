@@ -1,0 +1,16 @@
+# Reports contain server-specific info
+vps-reports/
+plans/reports/
+
+# Environment files
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Never commit credentials
+*.pem
+*.key
+id_rsa*
