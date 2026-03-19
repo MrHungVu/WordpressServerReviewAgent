@@ -149,16 +149,15 @@ Read current settings first:
 ```bash
 grep -E "^(PermitRootLogin|MaxAuthTries)" /etc/ssh/sshd_config
 ```
-Apply safe hardening:
+Apply safe hardening (MaxAuthTries only — do NOT touch PermitRootLogin):
 ```bash
-sed -i 's/^PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
 sed -i 's/^MaxAuthTries.*/MaxAuthTries 5/' /etc/ssh/sshd_config
-grep -q "^PermitRootLogin" /etc/ssh/sshd_config || echo "PermitRootLogin prohibit-password" >> /etc/ssh/sshd_config
 grep -q "^MaxAuthTries" /etc/ssh/sshd_config || echo "MaxAuthTries 5" >> /etc/ssh/sshd_config
 systemctl reload sshd
 ```
-- Set `PermitRootLogin prohibit-password` — NOT `no` (avoids locking user out)
-- **WARNING:** Do NOT disable `PasswordAuthentication` — user may not have key-based auth configured
+- **DO NOT** change `PermitRootLogin` — fresh VPS uses password auth only; changing it locks out the user
+- **DO NOT** disable `PasswordAuthentication` — user may not have key-based auth configured
+- SSH key setup + PermitRootLogin hardening should be done manually after setup, once key auth is confirmed working
 
 ### 9. Install fail2ban
 Check before act:
@@ -195,7 +194,7 @@ Return this summary to the orchestrator:
 - **MariaDB:** version
 - **MariaDB Root Password:** [generated password — keep secure]
 - **Firewall:** UFW/firewalld active (22, 80, 443 open)
-- **SSH Hardening:** PermitRootLogin=prohibit-password, MaxAuthTries=5
+- **SSH Hardening:** MaxAuthTries=5 (PermitRootLogin unchanged — harden manually after key auth setup)
 - **fail2ban:** Active
 - **PHP-FPM Socket:** /run/php/phpX.X-fpm.sock
 ```
