@@ -2,7 +2,9 @@
 
 ## Overview
 
-ReviewServerConfigAgent is a modular, skill-based audit system that performs multi-layer WordPress domain reviews. The architecture separates concerns by audit layer (VPS, Cloudflare, WordPress) and a top-level orchestration layer.
+ReviewServerConfigAgent is a modular, skill-based system for both auditing and setting up WordPress domains. The architecture separates concerns by skill type (audit vs setup) and by infrastructure layer (VPS, Cloudflare, WordPress), with top-level orchestration for each workflow.
+
+### Audit Workflow
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -18,6 +20,26 @@ ReviewServerConfigAgent is a modular, skill-based audit system that performs mul
         ┌───────▼──────┐  ┌────▼─────────┐  ┌─▼──────────────┐
         │ SSH Tunnel   │  │ Cloudflare   │  │ WP-CLI Binary  │
         │ & Commands   │  │ API v4       │  │ Execution      │
+        └──────────────┘  └──────────────┘  └────────────────┘
+```
+
+### Setup Workflow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   Domain Setup Agent                         │
+│              (Orchestrator, sequential execution)            │
+└───────────────┬──────────────┬──────────────┬────────────────┘
+                │              │              │
+        ┌───────▼──────┐  ┌────▼─────────┐  ┌─▼──────────────┐
+        │ VPS Server   │  │ WordPress    │  │ Cloudflare     │
+        │ Setup Skill  │  │ Site Setup   │  │ Domain Setup   │
+        │              │  │ Skill        │  │ Skill          │
+        └───────┬──────┘  └────┬─────────┘  └─┬──────────────┘
+                │              │              │
+        ┌───────▼──────┐  ┌────▼─────────┐  ┌─▼──────────────┐
+        │ Install LEMP │  │ WP-CLI + WP  │  │ Zone + DNS +   │
+        │ + firewall   │  │ + DB + config│  │ SSL + security │
         └──────────────┘  └──────────────┘  └────────────────┘
 ```
 
@@ -219,6 +241,154 @@ Overall Score:
 
 ---
 
+## Setup Skills Architecture
+
+### 1. VPS Server Setup Skill
+
+**Purpose:** Install and configure LEMP stack (Linux, Nginx, PHP-FPM, MariaDB) with security hardening.
+
+**Transport:** SSH (paramiko or sshpass)
+
+**Key Operations:**
+
+| Operation | Commands | Output |
+|-----------|----------|--------|
+| **OS Detection** | `uname -a`, `lsb_release -a` | Detect distribution, set package manager |
+| **System Updates** | `apt update && apt upgrade -y` | Fresh, patched system base |
+| **Nginx Install** | `apt install -y nginx`, enable/start | Web server running on 80/443 |
+| **PHP-FPM Install** | `apt install -y php-fpm php-*`, configure | PHP 8.1+ with required extensions |
+| **MariaDB Install** | `apt install -y mariadb-server`, secure | Database server, root password set |
+| **Firewall Setup** | `ufw enable`, allow SSH/80/443 | UFW active, common ports open |
+| **SSH Hardening** | Disable root login, change port (optional) | SSH secured against brute force |
+| **fail2ban Setup** | Install and configure jails | Automatic IP banning for attacks |
+
+**Credential Generation:**
+- Auto-generate MySQL root password (openssl rand -base64 32)
+- Return password to orchestrator only (never persisted)
+
+**Idempotency:** Safe to re-run; skips already-installed packages
+
+**Output:** VPS setup report with connection details and generated credentials
+
+---
+
+### 2. WordPress Site Setup Skill
+
+**Purpose:** Install WordPress, configure database, and apply security hardening.
+
+**Transport:** SSH + WP-CLI
+
+**Key Operations:**
+
+| Operation | Commands | Output |
+|-----------|----------|--------|
+| **WP-CLI Install** | Download/configure WP-CLI binary | WP-CLI available at `/usr/local/bin/wp` |
+| **WordPress Download** | `wp core download`, verify checksums | Latest WordPress in `/var/www/html` |
+| **Database Creation** | Create DB + user via MySQL | Auto-gen DB name + credentials |
+| **wp-config.php** | Write config, set auth salts, disable edit | Security hardening applied |
+| **File Permissions** | 755 for dirs, 644 for files, 600 for config | Correct ownership/permissions |
+| **Nginx Server Block** | Create vhost config, SSL placeholder | Nginx ready for domain |
+| **Security Rules** | Block XML-RPC, user enum, REST API abuses | Standard WP security patterns |
+
+**Credential Generation:**
+- Auto-gen database name: `wp_{domain}_{random}`
+- Auto-gen database user + password
+- Auto-gen WordPress admin user + password
+- All credentials passed to orchestrator, stored in setup report only
+
+**Output:** WordPress setup report with installation details and admin credentials
+
+---
+
+### 3. Cloudflare Domain Setup Skill
+
+**Purpose:** Configure Cloudflare for the domain (zone, DNS, SSL, security).
+
+**Transport:** Cloudflare API v4 (https://api.cloudflare.com/client/v4/)
+
+**Key Operations:**
+
+| API Endpoint | Operation | Result |
+|--------------|-----------|--------|
+| **POST /zones** | Create or detect zone | Zone ID for domain |
+| **POST /zones/:id/dns_records** | Add A record | Point domain to server IP |
+| **POST /zones/:id/dns_records** | Add CNAME for www | www subdomain proxied |
+| **POST /client/v4/certificates** | Create Origin Certificate | 15-year self-signed cert (Cloudflare) |
+| **PUT /zones/:id/ssl/certificate_packs** | Enable SSL Full Strict | Strict SSL mode active |
+| **PUT /zones/:id/ssl/universal/settings** | Configure SSL/TLS | HSTS, min TLS 1.2, Brotli |
+| **POST /zones/:id/page_rules** | Create cache bypass rules | `/wp-admin` + `/wp-login.php` bypass |
+| **PUT /zones/:id/security_settings** | Set security defaults | DDoS protection, rate limiting |
+
+**Origin Certificate Install:**
+- Generate origin cert + key pair via Cloudflare API
+- Deploy to server via SSH (via vps-server-setup)
+- Update Nginx SSL config to use origin cert
+
+**Credential Flow:**
+- Cloudflare API token passed in
+- Origin cert + key returned to orchestrator
+- Cert deployed to server then cleared from memory
+
+**Output:** Cloudflare setup report with DNS, SSL, and security settings
+
+---
+
+### 4. Domain Setup Agent (Orchestrator)
+
+**Purpose:** Sequence all 3 setup skills, capture credentials, produce setup report.
+
+**Workflow:**
+
+```
+1. User Input
+   └─ Parse domain name, collect SSH + Cloudflare credentials
+
+2. Sequential Setup Execution
+   ├─ VPS Server Setup
+   │   └─ Generate MySQL root password
+   ├─ WordPress Site Setup
+   │   ├─ Wait for DB (from step 1)
+   │   └─ Generate DB + admin credentials
+   └─ Cloudflare Domain Setup
+       ├─ Wait for server IP + WordPress ready (from steps 1–2)
+       ├─ Generate origin certificate
+       └─ Deploy certificate to server via SSH
+
+3. Credential Consolidation
+   ├─ Collect all auto-gen passwords + usernames
+   ├─ Collect Cloudflare origin cert details
+   ├─ Capture API responses for manual steps
+   └─ Format for delivery
+
+4. Setup Report Generation
+   ├─ Write setup instructions (domain, nameservers, etc.)
+   ├─ List all auto-generated credentials
+   ├─ Include manual follow-up steps (email config, SMTP, etc.)
+   ├─ Provide verification checklist
+   └─ Save to vps-reports/ directory
+
+5. Cleanup
+   ├─ Clear all credentials from memory
+   ├─ Clear SSH connections
+   └─ Confirm setup complete
+```
+
+**Credential Capture:**
+- MySQL root password from VPS setup
+- Database name, username, password from WordPress setup
+- WordPress admin username, password from WordPress setup
+- Cloudflare origin cert + key from Cloudflare setup
+- All credentials returned in final setup report (single-session only)
+
+**Error Handling:**
+- Partial failure: Mark failed step, report skipped steps
+- Rollback: Suggest deletion of VPS files + Cloudflare zone if user wants to retry
+- Clear all credentials on error (before cleanup)
+
+**Output:** Domain setup report with all credentials, manual steps, and verification checklist
+
+---
+
 ## Data Flow
 
 ### Credential Handling
@@ -244,6 +414,8 @@ Clear from memory
 ---
 
 ### Report Storage
+
+#### Audit Reports
 
 ```
 vps-reports/
@@ -281,6 +453,38 @@ vps-reports/
     ├── Database Integrity
     ├── Malware Scan
     └── Backup Status
+```
+
+#### Setup Reports
+
+```
+vps-reports/
+├── domain-setup-{domain}-{YYYYMMDD}.md
+│   ├── Setup Overview (domain, dates, status)
+│   ├── VPS Server Setup
+│   │   ├─ Installed packages (Nginx, PHP-FPM, MariaDB, firewall)
+│   │   ├─ MySQL root password (auto-generated)
+│   │   └─ Connection details
+│   ├── WordPress Site Setup
+│   │   ├─ Database credentials (auto-generated)
+│   │   ├─ WordPress admin credentials (auto-generated)
+│   │   └─ Installation path
+│   ├── Cloudflare Domain Setup
+│   │   ├─ Zone ID
+│   │   ├─ DNS records (A + www CNAME)
+│   │   ├─ SSL Mode (Full Strict)
+│   │   └─ Security settings
+│   ├── Manual Follow-Up Steps
+│   │   ├─ Update nameservers
+│   │   ├─ Configure email/SMTP
+│   │   ├─ Enable WordPress updates
+│   │   └─ Configure backups
+│   ├── Verification Checklist
+│   │   ├─ Check DNS propagation
+│   │   ├─ Test HTTPS redirect
+│   │   ├─ Verify WordPress login
+│   │   └─ Test email delivery
+│   └── Credential Summary (all generated passwords)
 ```
 
 ---
@@ -348,5 +552,5 @@ vps-reports/
 
 ---
 
-**Last Updated:** 2026-03-13
-**Version:** 1.0 Architecture
+**Last Updated:** 2026-03-19
+**Version:** 1.1

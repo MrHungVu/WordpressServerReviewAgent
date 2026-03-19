@@ -55,6 +55,39 @@ ReviewServerConfigAgent is an automated audit and security review system for Wor
 - [ ] Generate combined domain review report
 - [ ] Save all reports to `vps-reports/` directory
 
+### F5: VPS Server Setup
+- [ ] Install LEMP stack (Linux + Nginx + PHP-FPM + MariaDB)
+- [ ] Configure and harden firewall (UFW)
+- [ ] Harden SSH configuration (disable root, change port optional)
+- [ ] Install and configure fail2ban for brute force protection
+- [ ] Auto-generate and secure MySQL root password
+- [ ] Ensure idempotent — safe to re-run
+
+### F6: WordPress Site Setup
+- [ ] Install WP-CLI and download latest WordPress
+- [ ] Create database with auto-generated credentials
+- [ ] Configure wp-config.php with security hardening (DISALLOW_FILE_EDIT, non-default prefix)
+- [ ] Set proper file permissions (755 dirs, 644 files, 600 config)
+- [ ] Create Nginx server block with security rules (block XML-RPC, user enum, REST API abuse)
+- [ ] Auto-generate WordPress admin credentials
+
+### F7: Cloudflare Domain Setup
+- [ ] Create/detect Cloudflare zone for domain
+- [ ] Add DNS A record pointing to server IP
+- [ ] Add CNAME record for www subdomain
+- [ ] Generate and install Origin Certificate (15-year validity)
+- [ ] Configure SSL Mode to Full (Strict)
+- [ ] Apply security settings (HSTS, TLS 1.2+, Brotli, Always HTTPS)
+- [ ] Create page rules to bypass cache for wp-admin and wp-login
+
+### F8: Domain Setup Orchestrator
+- [ ] Sequence setup skills sequentially (VPS → WordPress → Cloudflare)
+- [ ] Collect and manage auto-generated credentials
+- [ ] Deploy Cloudflare origin certificate to VPS via SSH
+- [ ] Consolidate all credentials and setup details
+- [ ] Generate domain setup report with credentials and manual steps
+- [ ] Handle partial failures with clear status reporting
+
 ## Non-Functional Requirements
 
 ### NFR1: Security & Privacy
@@ -84,12 +117,19 @@ ReviewServerConfigAgent is an automated audit and security review system for Wor
 ## Technical Architecture
 
 ### Skill-Based Design
-ReviewServerConfigAgent is implemented as 4 Claude Skills:
+ReviewServerConfigAgent is implemented as 8 Claude Skills (4 audit + 4 setup):
 
+**Audit Skills:**
 1. **vps-server-audit** — SSH audit engine
 2. **cloudflare-domain-audit** — API audit engine
 3. **wordpress-site-audit** — WP-CLI audit engine
-4. **domain-review-agent** — Orchestrator & consolidation
+4. **domain-review-agent** — Audit orchestrator & consolidation
+
+**Setup Skills:**
+5. **vps-server-setup** — LEMP stack installation & firewall hardening
+6. **wordpress-site-setup** — WordPress + database installation & security hardening
+7. **cloudflare-domain-setup** — Zone, DNS, SSL, and security configuration
+8. **domain-setup-agent** — Setup orchestrator, credential capture, setup report
 
 ### Technology Stack
 - **SSH Transport:** Python paramiko or sshpass
@@ -126,6 +166,6 @@ See [Development Roadmap](./development-roadmap.md) for phases and milestones.
 
 ---
 
-**Version:** 1.0
-**Created:** 2026-03-13
-**Status:** Active Development (Post-V1 audit cycle)
+**Version:** 1.1
+**Last Updated:** 2026-03-19
+**Status:** Active Development (Setup skills v1.0 complete, audits stable)

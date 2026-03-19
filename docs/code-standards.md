@@ -12,7 +12,11 @@ ReviewServerConfigAgent/
 │       │   └── examples.md           # Usage examples
 │       ├── cloudflare-domain-audit/
 │       ├── wordpress-site-audit/
-│       └── domain-review-agent/
+│       ├── domain-review-agent/
+│       ├── vps-server-setup/
+│       ├── wordpress-site-setup/
+│       ├── cloudflare-domain-setup/
+│       └── domain-setup-agent/
 │
 ├── docs/
 │   ├── README.md                     # Quick start & overview
@@ -22,11 +26,12 @@ ReviewServerConfigAgent/
 │   ├── project-changelog.md          # Release notes & history
 │   └── development-roadmap.md        # Phases & milestones
 │
-├── vps-reports/                      # Audit output directory
-│   ├── domain-review-*.md
+├── vps-reports/                      # Audit & setup output directory
+│   ├── domain-review-*.md            # Audit reports
 │   ├── vps-audit-*.md
 │   ├── cloudflare-audit-*.md
-│   └── wordpress-audit-*.md
+│   ├── wordpress-audit-*.md
+│   └── domain-setup-*.md             # Setup reports
 │
 ├── CLAUDE.md                         # Project instructions & usage
 ├── .gitignore                        # Never commit reports or credentials
@@ -127,6 +132,7 @@ All reports use **Markdown with consistent structure:**
 
 ### Naming Convention
 
+#### Audit Reports
 ```
 {type}-audit-{domain}-{YYYYMMDD}.md
 ├─ domain-review-
@@ -135,11 +141,17 @@ All reports use **Markdown with consistent structure:**
 └─ wordpress-audit-
 ```
 
+#### Setup Reports
+```
+domain-setup-{domain}-{YYYYMMDD}.md
+```
+
 **Examples:**
-- `domain-review-example.com-20260313.md`
-- `vps-audit-example.com-20260313.md`
-- `cloudflare-audit-example.com-20260313.md`
-- `wordpress-audit-example.com-20260313.md`
+- Audit: `domain-review-example.com-20260313.md`
+- Audit: `vps-audit-example.com-20260313.md`
+- Audit: `cloudflare-audit-example.com-20260313.md`
+- Audit: `wordpress-audit-example.com-20260313.md`
+- Setup: `domain-setup-example.com-20260319.md`
 
 ### Report Content Standards
 
@@ -273,28 +285,37 @@ Example:
 
 ## Credential Handling Standards
 
-### Never Do
+### Never Do (Audit & Setup)
 - ❌ Save passwords/tokens to `credentials.md` or `.env.example`
-- ❌ Log full credentials in reports
-- ❌ Store credentials in report markdown files
+- ❌ Store credentials in report markdown files permanently
 - ❌ Write SSH keys to disk (use paramiko in-memory)
 - ❌ Include API tokens in example outputs
+- ❌ Commit reports containing credentials to version control
 
-### Always Do
+### Always Do (Audit)
 - ✅ Ask user for credentials at runtime
 - ✅ Pass credentials inline to skill execution
 - ✅ Clear credentials from memory after use
 - ✅ Log only sanitized credential type: "SSH key auth used"
-- ✅ Remind users to rotate credentials if compromised
+- ✅ Remove credentials from audit reports before saving
+
+### Always Do (Setup)
+- ✅ Generate passwords using `openssl rand -base64 32`
+- ✅ Pass auto-generated passwords to orchestrator only (in-memory)
+- ✅ Include auto-generated credentials ONLY in final setup report (single-session display)
+- ✅ Never persist setup credentials to files after report generation
+- ✅ Clear all credentials from memory after report delivery
 
 ### Credential Types
 
 | Type | Input Method | Storage | Notes |
 |------|--------------|---------|-------|
-| SSH Password | Prompted at runtime | Memory only, cleared after session | Requires paramiko or sshpass |
-| SSH Key | Passed as string | Memory only, cleared after session | Preferred; more secure |
-| Cloudflare API Token | Prompted at runtime | Memory only, cleared after session | Never API key (legacy) |
-| WordPress DB | Not needed (WP-CLI has direct access) | N/A | No user input required |
+| SSH Password (audit) | Prompted at runtime | Memory only, cleared after session | Requires paramiko or sshpass |
+| SSH Key (audit) | Passed as string | Memory only, cleared after session | Preferred; more secure |
+| Cloudflare API Token (audit) | Prompted at runtime | Memory only, cleared after session | Never API key (legacy) |
+| MySQL Password (setup) | Auto-generated | Setup report only, cleared after | Use openssl rand -base64 32 |
+| WordPress Admin (setup) | Auto-generated | Setup report only, cleared after | Generate secure username + password |
+| Cloudflare Origin Cert (setup) | Auto-generated | Deploy to server, cleared from memory | 15-year validity, Cloudflare-signed |
 
 ---
 
@@ -385,5 +406,5 @@ Provide 2–3 realistic examples showing:
 
 ---
 
-**Last Updated:** 2026-03-13
-**Version:** 1.0
+**Last Updated:** 2026-03-19
+**Version:** 1.1
