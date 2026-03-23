@@ -56,36 +56,50 @@ ReviewServerConfigAgent is an automated audit and security review system for Wor
 - [ ] Save all reports to `vps-reports/` directory
 
 ### F5: VPS Server Setup
-- [ ] Install LEMP stack (Linux + Nginx + PHP-FPM + MariaDB)
-- [ ] Configure and harden firewall (UFW)
+- [ ] Install OLS + LSPHP 8.2 + MariaDB + Redis + OPcache
+- [ ] Configure and harden Cloudflare-only UFW firewall (auto-fetch CF IPs)
 - [ ] Harden SSH configuration (disable root, change port optional)
-- [ ] Install and configure fail2ban for brute force protection
+- [ ] Install and configure fail2ban with OLS access log jail
 - [ ] Auto-generate and secure MySQL root password
+- [ ] Auto-generate Redis initial setup with DB 0-15
+- [ ] Adaptive memory tuning (2GB/4GB/8GB+ profiles)
+- [ ] WebAdmin console disabled by default
 - [ ] Ensure idempotent — safe to re-run
 
 ### F6: WordPress Site Setup
-- [ ] Install WP-CLI and download latest WordPress
+- [ ] Multi-site aware: call N times for N sites on same VPS
+- [ ] Install WordPress via WP-CLI + LSPHP
 - [ ] Create database with auto-generated credentials
-- [ ] Configure wp-config.php with security hardening (DISALLOW_FILE_EDIT, non-default prefix)
-- [ ] Set proper file permissions (755 dirs, 644 files, 600 config)
-- [ ] Create Nginx server block with security rules (block XML-RPC, user enum, REST API abuse)
+- [ ] Configure OLS vhost with isolated LSPHP worker pool
+- [ ] Setup Redis object cache per site (DB 0-15 isolation)
+- [ ] Install and configure LiteSpeed Cache plugin
+- [ ] Install WooCommerce with LSCache exclusions
+- [ ] Configure custom wp-admin URL via OLS rewrite rules
+- [ ] Create per-site backup script with 30-day retention cron
 - [ ] Auto-generate WordPress admin credentials
 
 ### F7: Cloudflare Domain Setup
 - [ ] Create/detect Cloudflare zone for domain
 - [ ] Add DNS A record pointing to server IP
 - [ ] Add CNAME record for www subdomain
-- [ ] Generate and install Origin Certificate (15-year validity)
+- [ ] Generate and install Origin Certificate (15-year validity at `/usr/local/lsws/conf/cert/`)
 - [ ] Configure SSL Mode to Full (Strict)
+- [ ] Enable WAF managed rules
+- [ ] Enable Bot Fight Mode
+- [ ] Add rate limiting for wp-login.php + xmlrpc.php
+- [ ] Add WooCommerce page rules (cart/checkout/my-account bypass)
+- [ ] Enable HTTP/3 (QUIC)
 - [ ] Apply security settings (HSTS, TLS 1.2+, Brotli, Always HTTPS)
-- [ ] Create page rules to bypass cache for wp-admin and wp-login
 
 ### F8: Domain Setup Orchestrator
-- [ ] Sequence setup skills sequentially (VPS → WordPress → Cloudflare)
+- [ ] Multi-site flow: VPS setup once, then loop WP + CF setup per domain
+- [ ] Adaptive LSAPI_CHILDREN calculation based on RAM + site count
+- [ ] Redis DB assignment (sequential: site0=DB0, site1=DB1...)
 - [ ] Collect and manage auto-generated credentials
 - [ ] Deploy Cloudflare origin certificate to VPS via SSH
 - [ ] Consolidate all credentials and setup details
-- [ ] Generate domain setup report with credentials and manual steps
+- [ ] Generate multi-site domain setup report
+- [ ] Partial failure handling (continue other sites if one fails)
 - [ ] Handle partial failures with clear status reporting
 
 ## Non-Functional Requirements
@@ -132,9 +146,13 @@ ReviewServerConfigAgent is implemented as 8 Claude Skills (4 audit + 4 setup):
 8. **domain-setup-agent** — Setup orchestrator, credential capture, setup report
 
 ### Technology Stack
+- **Web Server:** OpenLiteSpeed 1.7.x
+- **PHP Runtime:** LSPHP 8.2 with OPcache JIT
+- **Database:** MariaDB 10.5+
+- **Cache:** Redis 6.0+ (multi-DB 0-15)
 - **SSH Transport:** Python paramiko or sshpass
 - **Cloudflare API:** REST API v4 (zone analysis)
-- **WordPress CLI:** WP-CLI (WP-specific data extraction)
+- **WordPress CLI:** WP-CLI (via LSPHP)
 - **Report Generation:** Markdown with structured formatting
 - **Orchestration:** Claude Agent with multi-turn reasoning
 
@@ -154,11 +172,13 @@ ReviewServerConfigAgent is implemented as 8 Claude Skills (4 audit + 4 setup):
 
 ## Known Limitations
 
-1. **OpenLiteSpeed Support:** Requires manual LSPHP path configuration
-2. **Premium Plugin Updates:** Cannot auto-renew expired licenses
-3. **Physical Security:** Only audits logical security (cannot assess physical server access)
-4. **Code Quality Audits:** Does not perform deep static analysis on custom themes/plugins
-5. **Performance Benchmarking:** Does not measure response times or load handling capacity
+1. **Maximum 16 sites per VPS:** Redis DB 0-15 hard limit
+2. **ModSecurity WAF:** Deferred to v2.1 (currently CloudFlare WAF only)
+3. **Per-site OS user isolation:** Not implemented (all sites use www-data, planned for v2.1)
+4. **Premium Plugin Updates:** Cannot auto-renew expired licenses
+5. **Physical Security:** Only audits logical security (cannot assess physical server access)
+6. **Code Quality Audits:** Does not perform deep static analysis on custom themes/plugins
+7. **Performance Benchmarking:** Does not measure response times or load handling capacity
 
 ## Roadmap
 
@@ -166,6 +186,6 @@ See [Development Roadmap](./development-roadmap.md) for phases and milestones.
 
 ---
 
-**Version:** 1.1
-**Last Updated:** 2026-03-19
-**Status:** Active Development (Setup skills v1.0 complete, audits stable)
+**Version:** 2.0
+**Last Updated:** 2026-03-23
+**Status:** V2.0 Release (OLS stack, multi-site support, all 8 skills complete)

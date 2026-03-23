@@ -1,6 +1,6 @@
 ---
 name: domain-review-agent
-description: Orchestrating agent that runs vps-server-audit, cloudflare-domain-audit, and wordpress-site-audit skills to produce a full domain review. Collects credentials once, runs VPS + Cloudflare audits in parallel, then WordPress audit, and produces a combined final report. Use when user says "review domain", "check domain", "audit domain", or wants full site verification.
+description: Orchestrating agent that runs vps-server-audit, cloudflare-domain-audit, and wordpress-site-audit skills to produce a full domain review. Collects credentials once, runs VPS + Cloudflare audits in parallel, then WordPress audit, and produces a combined final report with OLS-specific cross-validations (Redis DB isolation, LSAPI_CHILDREN RAM budget, LSPHP+WP compatibility). Use when user says "review domain", "check domain", "audit domain", or wants full site verification.
 allowed-tools:
   - Bash
   - Read
@@ -65,11 +65,62 @@ Execute the 3 skills. VPS audit and Cloudflare audit can run in PARALLEL since t
 
 ## Step 4: Cross-Reference Findings
 After all 3 audits complete, cross-reference:
+
+### Existing Cross-Reference Checks
 - **DNS ↔ Server**: Cloudflare A record IP matches actual VPS IP
 - **SSL ↔ Cloudflare**: Cloudflare SSL mode matches server SSL config (Full Strict needs valid origin cert)
 - **Cloudflare cache ↔ WordPress**: Page rules bypass cache for wp-admin
 - **Server PHP ↔ WordPress**: PHP version compatible with WP + plugins
 - **Firewall ↔ Cloudflare**: Server firewall allows Cloudflare IPs
+
+### New OLS-Specific Cross-Reference Checks
+
+#### OLS SSL Cert Path ↔ Cloudflare Origin Cert
+- VPS audit: check `/usr/local/lsws/conf/cert/{domain}.crt` exists
+- CF audit: origin cert deployed with Full Strict mode
+- Cross-check: cert file exists AND SSL mode is strict
+- If OLS has cert but CF SSL not strict → WARN: downgrade risk
+- If CF is strict but no cert on OLS → CRITICAL: SSL will fail
+
+#### CF-Connecting-IP ↔ Cloudflare Proxy Status
+- VPS audit: `useClientIpInHeader` setting in `httpd_config.conf`
+- CF audit: domain proxied (orange cloud) on DNS records
+- Cross-check: if proxied AND `useClientIpInHeader` missing → WARN: logs show CF IPs instead of real visitor IPs
+- If not proxied → skip this check
+
+#### LSPHP Version ↔ WordPress Compatibility
+- VPS audit: LSPHP version detected
+- WP audit: WordPress version + active plugin requirements
+- Cross-check:
+  - PHP 8.2 supports WP 6.2+
+  - Check if any plugin warns about PHP version incompatibility
+  - Flag if LSPHP < 8.1 (no JIT, reduced WP version support)
+
+#### Redis DB Assignment Validation (No Duplicates Across Sites)
+- WP audit (per site): `WP_REDIS_DATABASE` value from `wp-config.php`
+- VPS audit: `redis-cli` per-DB key counts
+- Cross-check:
+  - No two sites share same Redis DB number
+  - All DB numbers within valid range 0-15
+  - DB numbers with keys match sites that have Redis configured
+  - Any DB with keys but no matching site → WARN: orphan cache (stale data)
+
+#### LSAPI_CHILDREN RAM Budget Validation
+- VPS audit: total RAM, `LSAPI_CHILDREN` per ext app config
+- Formula:
+  - `total_workers = sum(LSAPI_CHILDREN per site)`
+  - `estimated_php_mem = total_workers × 50MB` (average WP worker)
+  - `available_ram = total_ram - OS(500MB) - MariaDB(innodb_pool) - Redis(maxmemory) - OPcache - OLS(200MB)`
+- Cross-check:
+  - `estimated_php_mem < available_ram` → OK
+  - `estimated_php_mem >= available_ram` → WARN: memory overcommit risk, suggest reducing `LSAPI_CHILDREN` or upgrading RAM
+
+#### Backup Coverage Validation
+- WP audit (per site): backup script exists + cron configured + recent backup files
+- Cross-check:
+  - Every detected WordPress installation has a backup script
+  - Every backup cron ran within last 48 hours
+  - Any site without backup script or overdue cron → WARN
 
 ## Step 5: Generate Final Report
 Save to: `PROJECT_ROOT/vps-reports/domain-review-DOMAIN-YYYYMMDD.md`
@@ -92,7 +143,17 @@ Brief 3-5 sentence overview of domain health across all 3 layers.
 
 ## Cross-Reference Issues
 Issues found by comparing findings across layers:
-- [ ] issue description and fix
+
+| Check | VPS | Cloudflare | WordPress | Status |
+|-------|-----|------------|-----------|--------|
+| DNS A Record | {ip} | {ip} | - | OK/MISMATCH |
+| SSL Mode | cert at OLS path | Full Strict | FORCE_SSL_ADMIN | OK/WARN |
+| HTTPS | OLS listener 443 | Always HTTPS | siteurl=https | OK/WARN |
+| CF-Connecting-IP | configured | proxied | - | OK/WARN |
+| LSPHP ↔ WP | LSPHP 8.2 | - | WP 6.X | OK/WARN |
+| Redis Isolation | DB 0,1,2... | - | WP_REDIS_DATABASE | OK/WARN |
+| Memory Budget | {ram}MB avail | - | {workers}x50MB est | OK/WARN |
+| Backup Coverage | scripts exist | - | per-site cron | OK/WARN |
 
 ## Critical Actions (Fix Immediately)
 Priority-ordered list from ALL 3 audits:

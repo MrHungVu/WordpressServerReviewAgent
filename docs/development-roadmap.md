@@ -53,15 +53,47 @@
 
 ---
 
-### Phase 2: Post-V1 Audit Improvements (PLANNED — Q2 2026)
+### Phase 1.2: OLS Stack Upgrade with Multi-Site (COMPLETE — 2026-03-23)
+
+**Status:** ✅ Complete
+
+**Objectives:**
+- Migrate all 8 skills from Nginx/LEMP to OpenLiteSpeed + LSPHP + Redis
+- Add multi-site support (1 VPS → N WordPress sites)
+- Add adaptive memory tuning, Cloudflare-only firewall, custom login URLs
+- Add WooCommerce support with cache management
+
+**Deliverables:**
+- [x] vps-server-setup v2 (OLS + LSPHP + MariaDB + Redis)
+- [x] wordpress-site-setup v2 (multi-site, LSCache, WooCommerce)
+- [x] cloudflare-domain-setup v2 (WAF, bot fight, rate limiting)
+- [x] domain-setup-agent v2 (multi-site orchestrator)
+- [x] vps-server-audit v2 (OLS detection)
+- [x] wordpress-site-audit v2 (LSPHP, LSCache, Redis)
+- [x] cloudflare-domain-audit v2 (WAF, WooCommerce rules)
+- [x] domain-review-agent v2 (OLS cross-validations)
+- [x] Documentation updated for v2.0
+
+**Metrics Achieved:**
+- ✅ All 8 skills migrated to OLS stack
+- ✅ Multi-site orchestration fully functional
+- ✅ Redis DB isolation (0-15) per site
+- ✅ Adaptive LSAPI_CHILDREN tuning implemented
+- ✅ WAF, bot fight, rate limiting enabled
+- ✅ Documentation complete and comprehensive
+
+---
+
+### Phase 2: Post-V2 Audit Improvements (PLANNED — Q2 2026)
 
 **Status:** ⏳ Planning
 
 **Objectives:**
+- Add ModSecurity WAF integration
+- Implement per-site OS user isolation
 - Harden security findings detection
 - Improve plugin vulnerability database
 - Add automated fix recommendations
-- Expand server type support (beyond OpenLiteSpeed)
 
 **Key Tasks:**
 - [ ] Implement plugin vulnerability CVE matching (WordPress.org plugin security history)
@@ -215,5 +247,5 @@ Prioritized by:
 
 ---
 
-**Last Updated:** 2026-03-19
-**Next Review:** 2026-04-19
+**Last Updated:** 2026-03-23
+**Next Review:** 2026-04-23

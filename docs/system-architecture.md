@@ -26,21 +26,24 @@ ReviewServerConfigAgent is a modular, skill-based system for both auditing and s
 ### Setup Workflow
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                   Domain Setup Agent                         │
-│              (Orchestrator, sequential execution)            │
-└───────────────┬──────────────┬──────────────┬────────────────┘
-                │              │              │
+┌─────────────────────────────────────────────────────────────────┐
+│                   Domain Setup Agent (Multi-Site)               │
+│              (Orchestrator, VPS once, then per-domain loop)     │
+└───────────────┬──────────────┬──────────────┬────────────────────┘
+                │ (once)       │ (N times)    │ (N times)
         ┌───────▼──────┐  ┌────▼─────────┐  ┌─▼──────────────┐
         │ VPS Server   │  │ WordPress    │  │ Cloudflare     │
         │ Setup Skill  │  │ Site Setup   │  │ Domain Setup   │
         │              │  │ Skill        │  │ Skill          │
         └───────┬──────┘  └────┬─────────┘  └─┬──────────────┘
                 │              │              │
-        ┌───────▼──────┐  ┌────▼─────────┐  ┌─▼──────────────┐
-        │ Install LEMP │  │ WP-CLI + WP  │  │ Zone + DNS +   │
-        │ + firewall   │  │ + DB + config│  │ SSL + security │
-        └──────────────┘  └──────────────┘  └────────────────┘
+        ┌───────▼──────────────────────┐  ┌──▼─────────────────┐
+        │ Install OLS + LSPHP 8.2 +    │  │ Zone + DNS +       │
+        │ MariaDB + Redis + firewall   │  │ SSL Full Strict +  │
+        │ + SSH hardening + adapt mem  │  │ WAF + bot fight +  │
+        │ + OPcache JIT + fail2ban     │  │ rate limiting +    │
+        │ (single setup for all sites) │  │ WooCommerce rules  │
+        └──────────────────────────────┘  └────────────────────┘
 ```
 
 ## Component Architecture
@@ -245,7 +248,7 @@ Overall Score:
 
 ### 1. VPS Server Setup Skill
 
-**Purpose:** Install and configure LEMP stack (Linux, Nginx, PHP-FPM, MariaDB) with security hardening.
+**Purpose:** Install and configure OLS stack (OpenLiteSpeed, LSPHP 8.2, MariaDB, Redis, OPcache) with security hardening.
 
 **Transport:** SSH (paramiko or sshpass)
 
@@ -255,12 +258,15 @@ Overall Score:
 |-----------|----------|--------|
 | **OS Detection** | `uname -a`, `lsb_release -a` | Detect distribution, set package manager |
 | **System Updates** | `apt update && apt upgrade -y` | Fresh, patched system base |
-| **Nginx Install** | `apt install -y nginx`, enable/start | Web server running on 80/443 |
-| **PHP-FPM Install** | `apt install -y php-fpm php-*`, configure | PHP 8.1+ with required extensions |
+| **OLS Install** | `apt install -y openlitespeed`, enable/start | Web server running on 80/443 |
+| **LSPHP 8.2 Install** | `apt install -y lsphp82 lsphp82-*`, configure | PHP 8.2 with required extensions |
 | **MariaDB Install** | `apt install -y mariadb-server`, secure | Database server, root password set |
-| **Firewall Setup** | `ufw enable`, allow SSH/80/443 | UFW active, common ports open |
+| **Redis Install** | `apt install -y redis-server`, configure DBs 0-15 | Cache server, isolated per-site |
+| **OPcache JIT** | Configure `/usr/local/lsws/conf/php.ini` | JIT enabled, adaptive to RAM |
+| **Firewall Setup** | UFW with Cloudflare IPs only, auto-fetch CF IPs | UFW active, CF proxy protection |
 | **SSH Hardening** | Disable root login, change port (optional) | SSH secured against brute force |
-| **fail2ban Setup** | Install and configure jails | Automatic IP banning for attacks |
+| **fail2ban Setup** | Install, OLS access log jail | Automatic IP banning for attacks |
+| **Adaptive Memory** | Profile RAM (2GB/4GB/8GB+), tune LSAPI_CHILDREN | Resource allocation optimized |
 
 **Credential Generation:**
 - Auto-generate MySQL root password (openssl rand -base64 32)
@@ -274,20 +280,25 @@ Overall Score:
 
 ### 2. WordPress Site Setup Skill
 
-**Purpose:** Install WordPress, configure database, and apply security hardening.
+**Purpose:** Install WordPress on OLS with multi-site support, isolated LSPHP pool, Redis cache, LSCache, WooCommerce.
 
-**Transport:** SSH + WP-CLI
+**Transport:** SSH + WP-CLI (via LSPHP)
 
 **Key Operations:**
 
 | Operation | Commands | Output |
 |-----------|----------|--------|
-| **WP-CLI Install** | Download/configure WP-CLI binary | WP-CLI available at `/usr/local/bin/wp` |
-| **WordPress Download** | `wp core download`, verify checksums | Latest WordPress in `/var/www/html` |
+| **WP-CLI via LSPHP** | `/usr/local/lsws/lsphp82/bin/php /usr/local/bin/wp` | WP-CLI invoked via LSPHP |
+| **WordPress Download** | `wp core download`, verify checksums | Latest WordPress in per-site root |
 | **Database Creation** | Create DB + user via MySQL | Auto-gen DB name + credentials |
-| **wp-config.php** | Write config, set auth salts, disable edit | Security hardening applied |
-| **File Permissions** | 755 for dirs, 644 for files, 600 for config | Correct ownership/permissions |
-| **Nginx Server Block** | Create vhost config, SSL placeholder | Nginx ready for domain |
+| **wp-config.php** | Security hardening, Redis config, custom login URL | WP security + cache setup |
+| **OLS Vhost Config** | Create vhost, isolated LSPHP pool per site | Dedicated worker pool, resource isolation |
+| **PHP Pool** | LSAPI_CHILDREN per site (adaptive to RAM) | Memory-aware worker allocation |
+| **Redis Config** | Set WP_REDIS_DATABASE (0-15 per site), object cache plugin | Per-site cache isolation |
+| **LSCache Plugin** | Auto-install, configure for WordPress | LiteSpeed Cache integration |
+| **WooCommerce** | Always install + LSCache exclusions | E-commerce ready with cache bypass |
+| **Custom Login URL** | OLS rewrite rules + security | Non-standard wp-admin URL |
+| **Per-Site Backup** | Create backup script, cron 30-day retention | Automated daily backups |
 | **Security Rules** | Block XML-RPC, user enum, REST API abuses | Standard WP security patterns |
 
 **Credential Generation:**
@@ -302,7 +313,7 @@ Overall Score:
 
 ### 3. Cloudflare Domain Setup Skill
 
-**Purpose:** Configure Cloudflare for the domain (zone, DNS, SSL, security).
+**Purpose:** Configure Cloudflare for the domain (zone, DNS, SSL, WAF, bot fight, rate limiting, WooCommerce rules, HTTP/3).
 
 **Transport:** Cloudflare API v4 (https://api.cloudflare.com/client/v4/)
 
@@ -313,11 +324,14 @@ Overall Score:
 | **POST /zones** | Create or detect zone | Zone ID for domain |
 | **POST /zones/:id/dns_records** | Add A record | Point domain to server IP |
 | **POST /zones/:id/dns_records** | Add CNAME for www | www subdomain proxied |
-| **POST /client/v4/certificates** | Create Origin Certificate | 15-year self-signed cert (Cloudflare) |
+| **POST /client/v4/certificates** | Create Origin Certificate | 15-year cert for OLS path: `/usr/local/lsws/conf/cert/` |
 | **PUT /zones/:id/ssl/certificate_packs** | Enable SSL Full Strict | Strict SSL mode active |
-| **PUT /zones/:id/ssl/universal/settings** | Configure SSL/TLS | HSTS, min TLS 1.2, Brotli |
-| **POST /zones/:id/page_rules** | Create cache bypass rules | `/wp-admin` + `/wp-login.php` bypass |
-| **PUT /zones/:id/security_settings** | Set security defaults | DDoS protection, rate limiting |
+| **PUT /zones/:id/ssl/universal/settings** | Configure SSL/TLS | HSTS, min TLS 1.2, Brotli, HTTP/3 |
+| **PUT /zones/:id/security/waf/managed_rules** | Enable WAF managed rules | OWASP rule set protection |
+| **POST /zones/:id/firewall/rules** | Enable Bot Fight Mode | Automatic bot mitigation |
+| **POST /zones/:id/firewall/rules** | Rate limiting rules | wp-login.php + xmlrpc.php throttling |
+| **POST /zones/:id/page_rules** | WooCommerce bypass rules | `/cart/*`, `/checkout/*`, `/my-account/*` bypass |
+| **POST /zones/:id/page_rules** | Admin cache bypass | `/wp-admin` + `/wp-login.php` bypass |
 
 **Origin Certificate Install:**
 - Generate origin cert + key pair via Cloudflare API
@@ -335,39 +349,55 @@ Overall Score:
 
 ### 4. Domain Setup Agent (Orchestrator)
 
-**Purpose:** Sequence all 3 setup skills, capture credentials, produce setup report.
+**Purpose:** Multi-site orchestration: VPS setup once, then loop WordPress + Cloudflare per domain with adaptive resource allocation.
 
 **Workflow:**
 
 ```
 1. User Input
-   └─ Parse domain name, collect SSH + Cloudflare credentials
+   └─ Parse domain list, collect SSH + Cloudflare credentials
 
-2. Sequential Setup Execution
-   ├─ VPS Server Setup
-   │   └─ Generate MySQL root password
+2. VPS Server Setup (ONCE)
+   ├─ Profile available RAM
+   ├─ Install OLS + LSPHP + MariaDB + Redis
+   ├─ Calculate adaptive LSAPI_CHILDREN based on (RAM, site count)
+   ├─ Configure Cloudflare-only UFW firewall
+   ├─ Generate MySQL root password
+   └─ Return server IP + credentials
+
+3. Per-Domain Loop (N times, one per domain)
    ├─ WordPress Site Setup
-   │   ├─ Wait for DB (from step 1)
-   │   └─ Generate DB + admin credentials
+   │   ├─ Assign Redis DB (0-15, sequential)
+   │   ├─ Create OLS vhost + isolated LSPHP pool
+   │   ├─ Generate DB + admin credentials
+   │   └─ Deploy WooCommerce + LSCache + custom login URL
    └─ Cloudflare Domain Setup
-       ├─ Wait for server IP + WordPress ready (from steps 1–2)
-       ├─ Generate origin certificate
-       └─ Deploy certificate to server via SSH
+       ├─ Create zone + DNS records
+       ├─ Generate origin cert
+       ├─ Deploy cert to OLS
+       ├─ Enable WAF + bot fight + rate limiting
+       └─ Create WooCommerce cache bypass rules
 
-3. Credential Consolidation
+4. Credential Consolidation
    ├─ Collect all auto-gen passwords + usernames
-   ├─ Collect Cloudflare origin cert details
-   ├─ Capture API responses for manual steps
+   ├─ Collect Redis DB assignments (per site)
+   ├─ Collect Cloudflare origin cert paths
    └─ Format for delivery
 
-4. Setup Report Generation
-   ├─ Write setup instructions (domain, nameservers, etc.)
-   ├─ List all auto-generated credentials
-   ├─ Include manual follow-up steps (email config, SMTP, etc.)
-   ├─ Provide verification checklist
-   └─ Save to vps-reports/ directory
+5. Setup Report Generation
+   ├─ Write multi-site setup overview
+   ├─ List all auto-generated credentials (per site)
+   ├─ Include adaptive resource allocation details
+   ├─ Provide per-site verification checklist
+   └─ Save to vps-reports/domain-setup-{timestamp}.md
 
-5. Cleanup
+6. Partial Failure Handling
+   ├─ If site N fails, continue site N+1
+   ├─ Mark failed site in report
+   ├─ Suggest manual retry steps
+   └─ Provide rollback instructions
+
+7. Cleanup
    ├─ Clear all credentials from memory
    ├─ Clear SSH connections
    └─ Confirm setup complete
@@ -493,9 +523,14 @@ vps-reports/
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| **SSH Transport** | Python `paramiko` or `sshpass` | VPS server connection |
+| **Web Server** | OpenLiteSpeed 1.7.x | High-performance, OLS-native caching |
+| **PHP Runtime** | LSPHP 8.2 with JIT | FastCGI, OPcache JIT, secure by default |
+| **Database** | MariaDB 10.5+ | SQL database, InnoDB optimized |
+| **Cache Layer** | Redis 6.0+ | Object cache, session storage, multi-DB (0-15) |
+| **OPcache** | ZEND OPcache | Opcode caching, JIT compilation |
+| **SSH Transport** | Python `paramiko` | VPS server connection |
 | **API Client** | `requests` / curl | Cloudflare API calls |
-| **CLI Execution** | WP-CLI (Bash/PHP) | WordPress data extraction |
+| **CLI Execution** | WP-CLI (via LSPHP) | WordPress data extraction |
 | **Markdown Generation** | Template + string building | Report formatting |
 | **Orchestration** | Claude Agent (multi-turn) | Workflow coordination |
 
@@ -539,18 +574,23 @@ vps-reports/
 
 ## Scalability Considerations
 
-### Current (V1.0)
-- Single domain per run
-- Credential handling: single-session
+### Current (V2.0)
+- Multi-site support: 1 VPS → up to 16 WordPress sites (Redis DB 0-15 limit)
+- Single-session credential handling
 - Report storage: local filesystem
+- Adaptive memory tuning (2GB/4GB/8GB+ profiles)
+- Per-site isolated LSPHP worker pools
+- Per-site Redis DB isolation
 
 ### Phase 2+
-- Batch queue for multiple domains
+- Batch audit queue for multiple domains
 - Persistent credential vault (encrypted)
 - Database storage for audit history
 - Async job processing
+- ModSecurity WAF integration (v2.1+)
+- Per-site OS user isolation (v2.1+)
 
 ---
 
-**Last Updated:** 2026-03-19
-**Version:** 1.1
+**Last Updated:** 2026-03-23
+**Version:** 2.0

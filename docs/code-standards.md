@@ -7,16 +7,21 @@ ReviewServerConfigAgent/
 ├── .claude/
 │   └── skills/
 │       ├── vps-server-audit/
-│       │   ├── instructions.md      # Skill system prompt & capabilities
-│       │   ├── tests.md              # Test scenarios & expected outputs
-│       │   └── examples.md           # Usage examples
+│       │   └── SKILL.md             # Skill definition, implementation, tests
 │       ├── cloudflare-domain-audit/
+│       │   └── SKILL.md
 │       ├── wordpress-site-audit/
+│       │   └── SKILL.md
 │       ├── domain-review-agent/
+│       │   └── SKILL.md
 │       ├── vps-server-setup/
+│       │   └── SKILL.md
 │       ├── wordpress-site-setup/
+│       │   └── SKILL.md
 │       ├── cloudflare-domain-setup/
+│       │   └── SKILL.md
 │       └── domain-setup-agent/
+│           └── SKILL.md
 │
 ├── docs/
 │   ├── README.md                     # Quick start & overview
@@ -40,54 +45,61 @@ ReviewServerConfigAgent/
 ```
 
 **Key Directory Rules:**
-- `.claude/skills/` — Each skill is self-contained (instructions + tests)
+- `.claude/skills/` — Each skill is self-contained (SKILL.md: definition + implementation + tests)
 - `docs/` — All documentation files live here
 - `vps-reports/` — Generated audit reports (temporary, not version-controlled)
 - No source code repository (skills are Claude-native, not code files)
+- V2.0: All skills use single SKILL.md file with unified structure
 
 ---
 
 ## Skill Implementation Standards
 
-### Skill Structure
+### Skill Structure (V2.0)
 
-Each skill has a dedicated directory with:
+Each skill has a dedicated directory with unified SKILL.md:
 
 ```
 .claude/skills/{skill-name}/
-├── instructions.md                   # System prompt & core definitions
-├── tests.md                          # Test cases & validation
-└── examples.md                       # Usage examples & sample outputs
+└── SKILL.md                          # Definition, implementation, tests, examples
 ```
 
-### Skill Instructions Template
+### Skill Markdown Template (SKILL.md)
 
-**Required Sections in `instructions.md`:**
+**Required Sections in `SKILL.md`:**
 
 1. **Purpose** — One-sentence skill objective
-2. **Inputs** — What user provides (domain, credentials, parameters)
-3. **Outputs** — What skill returns (report format, data structure)
-4. **Detailed Implementation** — Step-by-step audit logic
-5. **Error Handling** — How to handle connectivity/permission failures
-6. **Assumptions** — Server type, OS, software versions
-7. **Security** — Credential handling, data sensitivity
-8. **Fallbacks** — Alternative approaches for different server types
+2. **Stack Notes** (V2.0) — OLS/LSPHP/Redis/LSCache awareness for implementation
+3. **Multi-Site Awareness** (V2.0) — Per-site resource isolation, per-DB Redis, site-specific LSPHP pools
+4. **Inputs** — What user provides (domain, credentials, parameters)
+5. **Outputs** — What skill returns (report format, data structure)
+6. **Detailed Implementation** — Step-by-step audit/setup logic
+7. **Error Handling** — How to handle connectivity/permission failures
+8. **Assumptions** — Server type, OS, software versions (OLS v1.7.x, LSPHP 8.2, MariaDB 10.5+)
+9. **Security** — Credential handling, data sensitivity
+10. **Fallbacks** — Alternative approaches (direct system PHP, manual WP-CLI path)
+11. **Test Cases** — Happy path, edge cases, error scenarios
+12. **Examples** — Sample successful outputs
 
-### Skill Testing Standards
+### Skill Testing Standards (V2.0)
 
-**Test Cases in `tests.md`:**
+**Test Cases in `SKILL.md` (Test Cases section):**
 
-- [ ] Happy path: Valid domain, all systems responding
+- [ ] Happy path: Valid domain, all systems responding, multi-site OK
 - [ ] Missing credentials: No SSH key, invalid Cloudflare token
 - [ ] Server unreachable: SSH timeout, API 5xx error
 - [ ] Partial data: WP-CLI fails but VPS/Cloudflare succeed
 - [ ] Edge cases: Domain not on Cloudflare, WordPress not installed
-- [ ] Performance: Measure audit duration, verify < 5 min
+- [ ] OLS detection: LSPHP path auto-detection works correctly
+- [ ] Redis config: Per-site DB isolation validated, no duplicates
+- [ ] LSAPI_CHILDREN: RAM budget checked, overcommit detected
+- [ ] Performance: Measure audit/setup duration (v2 baseline)
 
 **Test Validation:**
-- Actual test runs against real domains (post-development)
-- Example outputs in `examples.md` with before/after scenarios
+- Actual test runs against real OLS servers with LSPHP 8.2
+- Example outputs in SKILL.md Examples section
 - Error message clarity (users understand what went wrong)
+- Multi-site scenarios tested (2–3 sites per VPS)
 
 ---
 
@@ -406,5 +418,35 @@ Provide 2–3 realistic examples showing:
 
 ---
 
-**Last Updated:** 2026-03-19
-**Version:** 1.1
+## OLS Stack Configuration Notes (V2.0)
+
+### OpenLiteSpeed Config Syntax
+- Listeners: `httpd_config.conf` IP:port settings
+- Vhosts: Per-domain config with static context, script context, OLS rewrite rules
+- LSAPI: External app with LSAPI_CHILDREN, LSAPI_PROCESSES per site
+- SSL cert paths: `/usr/local/lsws/conf/cert/{domain}.{crt,key}`
+- WebAdmin console: Port 7080, disabled by default in v2
+
+### LSPHP WP-CLI Pattern
+```bash
+# Use explicit LSPHP path for WordPress CLI
+/usr/local/lsws/lsphp82/bin/php /usr/local/bin/wp --path=/path/to/site --allow-root
+```
+
+### RAM Profile Awareness (V2.0)
+- **2GB VPS:** LSAPI_CHILDREN=2, OPcache=32MB, Redis=256MB, MariaDB=256MB
+- **4GB VPS:** LSAPI_CHILDREN=4, OPcache=64MB, Redis=512MB, MariaDB=512MB
+- **8GB+ VPS:** LSAPI_CHILDREN=8+, OPcache=128MB, Redis=1GB, MariaDB=1GB
+- Automatic detection and tuning per site count
+
+### Multi-Site Awareness (V2.0)
+- Redis DB 0-15 per site (no sharing)
+- Isolated LSPHP pools (one process group per site)
+- Per-site OLS vhost configuration
+- Per-site backup scripts
+- Adaptive LSAPI_CHILDREN across all sites
+
+---
+
+**Last Updated:** 2026-03-23
+**Version:** 2.0

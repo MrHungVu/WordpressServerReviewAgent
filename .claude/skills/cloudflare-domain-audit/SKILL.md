@@ -1,6 +1,6 @@
 ---
 name: cloudflare-domain-audit
-description: Audit Cloudflare configuration for a domain using Cloudflare API. Checks DNS records, SSL/TLS mode, security settings, caching, performance, page rules, firewall rules, and edge certificates. Produces a report with status levels and fix guidance. Use when user wants to check/verify/audit Cloudflare domain config.
+description: Audit Cloudflare configuration for a domain using Cloudflare API. Checks DNS records, SSL/TLS mode, security settings, caching, performance, page rules, firewall rules, WAF managed rules, Bot Fight Mode, WooCommerce cache bypass rules, HTTP/3, rate limiting, and edge certificates. Produces a report with status levels and fix guidance. Use when user wants to check/verify/audit Cloudflare domain config.
 allowed-tools:
   - Bash
   - Read
@@ -79,11 +79,59 @@ curl -s "https://api.cloudflare.com/client/v4/zones?name=DOMAIN" \
 - Should have: cache everything for static, bypass cache for wp-admin/wp-login
 - SSL rules if needed
 
+#### WooCommerce Page Rules Check
+```bash
+# Get all page rules
+PAGE_RULES=$(curl -s "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/pagerules" \
+  -H "X-Auth-Email: ${CF_EMAIL}" -H "X-Auth-Key: ${CF_KEY}" -H "Content-Type: application/json")
+
+# Check for WooCommerce bypass rules
+CART_RULE=$(echo "$PAGE_RULES" | jq '[.result[] | select(.targets[0].constraint.value | contains("cart"))] | length')
+CHECKOUT_RULE=$(echo "$PAGE_RULES" | jq '[.result[] | select(.targets[0].constraint.value | contains("checkout"))] | length')
+MYACCOUNT_RULE=$(echo "$PAGE_RULES" | jq '[.result[] | select(.targets[0].constraint.value | contains("my-account"))] | length')
+
+echo "WooCommerce cache bypass rules:"
+echo "  /cart/*: $([ $CART_RULE -gt 0 ] && echo 'OK' || echo 'MISSING')"
+echo "  /checkout/*: $([ $CHECKOUT_RULE -gt 0 ] && echo 'OK' || echo 'MISSING')"
+echo "  /my-account/*: $([ $MYACCOUNT_RULE -gt 0 ] && echo 'OK' || echo 'MISSING')"
+```
+Flag as WARN if WooCommerce is detected on site but cache bypass page rules are missing.
+
 ### 7. Firewall Rules
 - `GET /zones/{zone_id}/firewall/rules`
 - Rate limiting rules
 - Bot protection
 - `GET /zones/{zone_id}/settings/waf`
+
+#### WAF Managed Rules Check
+```bash
+# Get zone rulesets
+RULESETS=$(curl -s "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/rulesets" \
+  -H "X-Auth-Email: ${CF_EMAIL}" -H "X-Auth-Key: ${CF_KEY}" -H "Content-Type: application/json")
+
+# Check Cloudflare Managed Ruleset and OWASP
+CF_WAF=$(echo "$RULESETS" | jq '[.result[] | select(.name | contains("Cloudflare Managed"))] | length')
+OWASP_WAF=$(echo "$RULESETS" | jq '[.result[] | select(.name | contains("OWASP"))] | length')
+
+echo "Cloudflare Managed WAF: $([ $CF_WAF -gt 0 ] && echo 'ENABLED' || echo 'NOT FOUND')"
+echo "OWASP Core Ruleset: $([ $OWASP_WAF -gt 0 ] && echo 'ENABLED' || echo 'NOT FOUND')"
+```
+If rulesets returns empty or 403: report "WAF managed rules: requires Pro+ plan" (INFO, not WARN).
+
+#### Bot Fight Mode Check
+```bash
+BOT_MGMT=$(curl -s "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/bot_management" \
+  -H "X-Auth-Email: ${CF_EMAIL}" -H "X-Auth-Key: ${CF_KEY}" -H "Content-Type: application/json")
+
+FIGHT_MODE=$(echo "$BOT_MGMT" | jq -r '.result.fight_mode // "unknown"')
+echo "Bot Fight Mode: ${FIGHT_MODE}"
+```
+If API returns error (free plan limited), fallback to browser_check setting:
+```bash
+BROWSER_CHECK=$(curl -s "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/settings/browser_check" \
+  -H "X-Auth-Email: ${CF_EMAIL}" -H "X-Auth-Key: ${CF_KEY}" | jq -r '.result.value')
+echo "Browser Integrity Check (fallback): ${BROWSER_CHECK}"
+```
 
 ### 8. Edge Certificates
 - `GET /zones/{zone_id}/ssl/certificate_packs`
@@ -94,6 +142,34 @@ curl -s "https://api.cloudflare.com/client/v4/zones?name=DOMAIN" \
 - `GET /zones/{zone_id}/settings/ipv6`
 - `GET /zones/{zone_id}/settings/websockets`
 - `GET /zones/{zone_id}/settings/http3`
+
+#### HTTP/3 Check with Recommendation
+```bash
+HTTP3=$(curl -s "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/settings/http3" \
+  -H "X-Auth-Email: ${CF_EMAIL}" -H "X-Auth-Key: ${CF_KEY}" | jq -r '.result.value')
+
+echo "HTTP/3 (QUIC): ${HTTP3}"
+if [ "$HTTP3" != "on" ]; then
+  echo "RECOMMENDATION: Enable HTTP/3 for improved performance on modern browsers"
+fi
+```
+
+### 10. Rate Limiting Rules
+```bash
+# Check rate limiting rulesets
+RATE_RULES=$(curl -s "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/rulesets/phases/http_ratelimit/entrypoint" \
+  -H "X-Auth-Email: ${CF_EMAIL}" -H "X-Auth-Key: ${CF_KEY}" -H "Content-Type: application/json" 2>/dev/null)
+
+if echo "$RATE_RULES" | jq -e '.result.rules' &>/dev/null; then
+  WP_LOGIN_RL=$(echo "$RATE_RULES" | jq '[.result.rules[] | select(.expression | contains("wp-login"))] | length')
+  XMLRPC_RL=$(echo "$RATE_RULES" | jq '[.result.rules[] | select(.expression | contains("xmlrpc"))] | length')
+
+  echo "Rate limiting - wp-login.php: $([ $WP_LOGIN_RL -gt 0 ] && echo 'CONFIGURED' || echo 'MISSING')"
+  echo "Rate limiting - xmlrpc.php: $([ $XMLRPC_RL -gt 0 ] && echo 'CONFIGURED/BLOCKED' || echo 'MISSING')"
+else
+  echo "Rate limiting rules: not available on plan (INFO)"
+fi
+```
 
 ## Report Format
 Save report to: `PROJECT_ROOT/vps-reports/cloudflare-audit-DOMAIN-YYYYMMDD.md`
@@ -116,6 +192,10 @@ Save report to: `PROJECT_ROOT/vps-reports/cloudflare-audit-DOMAIN-YYYYMMDD.md`
 | Caching | OK/WARN/CRITICAL | brief |
 | Page Rules | OK/WARN/CRITICAL | brief |
 | Firewall | OK/WARN/CRITICAL | brief |
+| WAF Rules | OK/INFO/WARN | brief |
+| Bot Protection | OK/WARN | brief |
+| WooCommerce Rules | OK/WARN/N/A | brief |
+| Rate Limiting | OK/WARN | brief |
 
 ## DNS Records
 | Type | Name | Value | Proxied | Status |
@@ -129,6 +209,27 @@ Save report to: `PROJECT_ROOT/vps-reports/cloudflare-audit-DOMAIN-YYYYMMDD.md`
 **Recommended:** what it should be
 **How to Fix:** Cloudflare dashboard navigation OR API curl command
 **Why:** explanation
+
+## WAF & Bot Protection
+| Setting | Current | Recommended | Status |
+|---------|---------|-------------|--------|
+| Cloudflare Managed WAF | enabled/disabled/unavailable | enabled (Pro+) | OK/INFO |
+| OWASP Core Ruleset | enabled/disabled/unavailable | enabled (Pro+) | OK/INFO |
+| Bot Fight Mode | on/off | on | OK/WARN |
+| Browser Integrity | on/off | on | OK/WARN |
+
+## Rate Limiting
+| Target | Status | Recommended |
+|--------|--------|-------------|
+| wp-login.php | configured/missing | 5 req/10s |
+| xmlrpc.php | blocked/missing | block entirely |
+
+## WooCommerce Cache Rules
+| Page | Cache Bypass Rule | Status |
+|------|-------------------|--------|
+| /cart/* | present/missing | OK/WARN |
+| /checkout/* | present/missing | OK/WARN |
+| /my-account/* | present/missing | OK/WARN |
 
 ## Action Items
 ### Critical (Fix Now)
@@ -145,6 +246,8 @@ Save report to: `PROJECT_ROOT/vps-reports/cloudflare-audit-DOMAIN-YYYYMMDD.md`
 - NEVER save API keys or email to any file
 - Use `jq` to parse JSON (install if needed: `sudo apt-get install -y jq`)
 - If API call returns 403/404, note as "unavailable on current plan" and move on
+- WAF managed rules and rate limiting returning 403/empty = INFO not WARN (requires Pro+ plan)
 - Rocket Loader can break WordPress — always flag this
 - Provide both dashboard path AND API curl command for fixes
 - Cross-reference DNS A record with actual VPS IP if available
+- WooCommerce page rule check: flag WARN only if WooCommerce is detected on the site
