@@ -43,7 +43,6 @@ Ask user for ALL of the following via AskUserQuestion tool. NEVER save any crede
 6. **Cloudflare email**
 7. **Cloudflare Global API Key**
 8. **WordPress admin email** — shared across all sites
-9. **Admin IP** — your IP address for UFW SSH whitelist (e.g., 203.0.113.42)
 
 ### Conditional
 10. **MariaDB root password** — ask ONLY if VPS already has OLS + MariaDB installed (vps-server-setup detects existing install and skips re-install; in that case the orchestrator needs the existing root password to pass downstream)
@@ -77,14 +76,13 @@ If SSH fails: ask user to verify host/user/password/port. If CF API returns `fal
 
 ## Step 3: Activate vps-server-setup (ONCE)
 
-Run once for the entire VPS. Pass: SSH credentials, first domain (for hostname context), admin IP, optional SSH public key, optional custom SSH port.
+Run once for the entire VPS. Pass: SSH credentials, first domain (for hostname context), optional SSH public key, optional custom SSH port.
 
 ```
 Activate skill: vps-server-setup
 Pass:
   - SSH creds (host, user, password, port)
   - primary_domain = domain_list[0]
-  - admin_ip
   - ssh_public_key  (optional)
   - custom_ssh_port (optional)
 ```
@@ -245,7 +243,7 @@ Display full report in conversation AND save to file. Use plaintext format so us
   MariaDB Root Password:  {MARIADB_ROOT_PASS}
   Redis:                  active (maxmemory={REDIS_MAXMEM}mb)
   OPcache:                {opcache_mem}MB, JIT=tracing
-  Firewall:               UFW (SSH from {admin_ip}, 80+443 CF only)
+  Firewall:               UFW (SSH open + fail2ban, 80+443 CF only)
   fail2ban:               active (sshd + openlitespeed-auth)
   WebAdmin:               disabled
   Config:                 /usr/local/lsws/conf/httpd_config.conf

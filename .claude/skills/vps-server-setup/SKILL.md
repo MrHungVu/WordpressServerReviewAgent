@@ -22,7 +22,6 @@ Set up a fresh Linux VPS with OpenLiteSpeed + LSPHP 8.2 + MariaDB + Redis for Wo
 - SSH user (default: root)
 - SSH port (default: 22)
 - Domain name (for context/report — first site)
-- Admin IP (for UFW SSH whitelist)
 - New sudo username (optional — skip user creation if empty)
 - SSH public key (optional — skip key auth setup if empty)
 - Custom SSH port (optional — skip port change if empty)
@@ -167,7 +166,6 @@ accessControl {
   # ... all fetched CF IPv4 ranges ...
   allow                   {CF_IPV6_RANGE_1}
   # ... all fetched CF IPv6 ranges ...
-  allow                   {ADMIN_IP}
 }
 
 listener Default {
@@ -361,8 +359,8 @@ ufw default allow outgoing
 ACTIVE_SSH_PORT=${CUSTOM_SSH_PORT:-$(grep -E "^Port " /etc/ssh/sshd_config | awk '{print $2}')}
 ACTIVE_SSH_PORT=${ACTIVE_SSH_PORT:-22}
 
-# Allow SSH from admin IP only
-ufw allow from ${ADMIN_IP} to any port ${ACTIVE_SSH_PORT} proto tcp
+# Allow SSH from any IP (dynamic IP users — protected by fail2ban + key auth + MaxAuthTries)
+ufw allow ${ACTIVE_SSH_PORT}/tcp
 
 # Allow 80 and 443 from Cloudflare IPs only
 for ip in $(curl -s https://www.cloudflare.com/ips-v4); do
@@ -379,8 +377,8 @@ ufw --force enable
 
 CentOS (firewalld) equivalent:
 ```bash
-firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='${ADMIN_IP}' port protocol='tcp' port='${ACTIVE_SSH_PORT}' accept"
-# Add each CF IP range similarly for 80/443, then:
+firewall-cmd --permanent --add-port=${ACTIVE_SSH_PORT}/tcp
+# Add each CF IP range for 80/443, then:
 firewall-cmd --reload
 ```
 
@@ -514,7 +512,7 @@ Output ALL information in copy-friendly format so user can save credentials befo
 
 ── SECURITY ───────────────────────────────────────────────────
   Firewall:             UFW active
-    SSH:                port {ACTIVE_SSH_PORT} from {ADMIN_IP} only
+    SSH:                port {ACTIVE_SSH_PORT} open (protected by fail2ban + key auth)
     HTTP/HTTPS:         80+443 from Cloudflare IPs only
     Default:            deny all other
   fail2ban:             active (sshd + openlitespeed-auth jails)
