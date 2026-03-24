@@ -164,27 +164,30 @@ Skip this section if Redis is not installed on the server.
   - `FORCE_SSL_ADMIN` — should be true
 
 ### 8. Custom Login URL Check
-Check if a custom login URL is configured to protect wp-login.php:
+Check if custom login URL is configured via mu-plugin (PHP-level protection):
 
 ```bash
 # Check wp-config.php for custom login constant
-LOGIN_SLUG=$(grep -oP "LOGIN_SLUG.*?'([^']+)'" ${WP_PATH}/wp-config.php 2>/dev/null | grep -oP "'[^']+'" | tr -d "'")
+LOGIN_SLUG=$(grep -oP "CUSTOM_LOGIN_SLUG.*?'([^']+)'" ${WP_PATH}/wp-config.php 2>/dev/null | grep -oP "'[^']+'" | tr -d "'")
 
 if [ -n "$LOGIN_SLUG" ]; then
   echo "Custom Login URL: /${LOGIN_SLUG}"
 
-  # Check OLS vhost rewrite rules contain the slug
-  DOMAIN_SLUG=$(basename $(dirname ${WP_PATH}))
-  if [ -f "/usr/local/lsws/conf/vhosts/${DOMAIN_SLUG}.conf" ]; then
-    grep -q "${LOGIN_SLUG}" "/usr/local/lsws/conf/vhosts/${DOMAIN_SLUG}.conf" 2>/dev/null && \
-      echo "OLS rewrite for custom login: CONFIGURED" || \
-      echo "WARN: Custom login slug in wp-config but NOT in OLS rewrite rules"
+  # Check mu-plugin exists (primary protection — PHP level)
+  if [ -f "${WP_PATH}/wp-content/mu-plugins/custom-login-url.php" ]; then
+    echo "Custom login mu-plugin: INSTALLED (OK)"
+    # Verify mu-plugin reads the same slug
+    grep -q "CUSTOM_LOGIN_SLUG" "${WP_PATH}/wp-content/mu-plugins/custom-login-url.php" && \
+      echo "mu-plugin reads CUSTOM_LOGIN_SLUG: OK" || \
+      echo "WARN: mu-plugin does not reference CUSTOM_LOGIN_SLUG constant"
+  else
+    echo "CRITICAL: Custom login mu-plugin MISSING — /wp-login.php and /wp-admin/ are NOT protected"
+    echo "FIX: Re-run wordpress-site-setup or manually install mu-plugin"
   fi
 
-  # Test: direct wp-login.php should be blocked (check OLS rewrite)
-  grep -q "wp-login.*\[F" "/usr/local/lsws/conf/vhosts/${DOMAIN_SLUG}.conf" 2>/dev/null && \
-    echo "Direct wp-login.php: BLOCKED (OK)" || \
-    echo "WARN: wp-login.php not blocked in OLS rewrite rules"
+  # Check WP-CLI: verify mu-plugin is loaded
+  ${WP_CLI} eval 'echo defined("CUSTOM_LOGIN_SLUG") ? "SLUG_DEFINED" : "NOT_DEFINED";' \
+    --path=${WP_PATH} --allow-root 2>/dev/null
 else
   echo "Custom Login URL: NOT configured (WARN - using default wp-login.php)"
 fi

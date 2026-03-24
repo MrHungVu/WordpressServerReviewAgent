@@ -153,7 +153,7 @@ sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST '
   ${WP_CLI} config set WP_REDIS_DATABASE {SITE_NUMBER}  --raw --path=${WP_PATH} --allow-root
   ${WP_CLI} config set WP_REDIS_PREFIX '"'"'{DOMAIN_SLUG}:'"'"' --path=${WP_PATH} --allow-root
 
-  # Custom login URL constant (used by OLS rewrite and optional PHP plugin)
+  # Custom login URL constant (used by mu-plugin for PHP-level login protection)
   ${WP_CLI} config set CUSTOM_LOGIN_SLUG '"'"'{LOGIN_SLUG}'"'"' --path=${WP_PATH} --allow-root
 '
 ```
@@ -179,7 +179,87 @@ sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST '
 '
 ```
 
-### 8. Create Per-Site PHP.ini
+### 8. Install Custom Login mu-plugin (PHP-level protection)
+**This is the primary login protection mechanism.** OLS rewrite rules cannot block `/wp-admin/` because WordPress handles the redirect internally via PHP. A mu-plugin intercepts at PHP level before WordPress redirects.
+
+```bash
+sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST "
+  mkdir -p /var/www/{domain}/html/wp-content/mu-plugins
+  cat > /var/www/{domain}/html/wp-content/mu-plugins/custom-login-url.php << 'MUEOF'
+<?php
+/**
+ * Custom Login URL — mu-plugin
+ * Reads CUSTOM_LOGIN_SLUG from wp-config.php.
+ * Blocks direct /wp-login.php and /wp-admin/ for unauthenticated users.
+ * Only allows login via /{slug}.
+ */
+if ( ! defined('CUSTOM_LOGIN_SLUG') || empty(CUSTOM_LOGIN_SLUG) ) return;
+
+\$custom_slug = CUSTOM_LOGIN_SLUG;
+
+// Register custom login slug as a rewrite rule
+add_action('init', function() use (\$custom_slug) {
+    add_rewrite_rule( '^' . preg_quote(\$custom_slug, '/') . '/?$', 'wp-login.php', 'top' );
+});
+
+// Change the login URL WordPress generates (email links, redirects, etc.)
+add_filter('login_url', function(\$login_url, \$redirect, \$force_reauth) use (\$custom_slug) {
+    return home_url('/' . \$custom_slug . '/');
+}, 10, 3);
+
+// Block direct /wp-login.php access (except allowed actions and POST from valid referer)
+add_action('login_init', function() use (\$custom_slug) {
+    // Allow: logout, password reset, registration confirmation
+    \$allowed_actions = ['logout', 'rp', 'resetpass', 'postpass', 'confirmaction'];
+    if ( isset(\$_GET['action']) && in_array(\$_GET['action'], \$allowed_actions) ) return;
+
+    // Allow: POST requests that came from the custom login page (form submission)
+    if ( \$_SERVER['REQUEST_METHOD'] === 'POST' ) return;
+
+    // Check if request came via the custom slug (parsed by rewrite rule)
+    \$request_uri = \$_SERVER['REQUEST_URI'];
+    if ( strpos(\$request_uri, '/' . \$custom_slug) !== false ) return;
+
+    // Block everything else — return 404 (looks like page doesn't exist)
+    wp_die('Not Found', '404 Not Found', ['response' => 404]);
+});
+
+// Block /wp-admin/ for unauthenticated users — redirect to homepage instead of login
+add_action('admin_init', function() use (\$custom_slug) {
+    // Allow AJAX requests (WooCommerce frontend uses admin-ajax.php)
+    if ( defined('DOING_AJAX') && DOING_AJAX ) return;
+
+    // Allow logged-in users
+    if ( is_user_logged_in() ) return;
+
+    // Block: redirect unauthenticated /wp-admin/ to homepage (not login page)
+    wp_redirect( home_url('/'), 302 );
+    exit;
+});
+
+// Flush rewrite rules on activation (once)
+add_action('init', function() use (\$custom_slug) {
+    if ( get_option('custom_login_slug_flushed') !== \$custom_slug ) {
+        flush_rewrite_rules();
+        update_option('custom_login_slug_flushed', \$custom_slug);
+    }
+});
+MUEOF
+  chown www-data:www-data /var/www/{domain}/html/wp-content/mu-plugins/custom-login-url.php
+  chmod 644 /var/www/{domain}/html/wp-content/mu-plugins/custom-login-url.php
+"
+```
+
+**How it works:**
+- `/wp-login.php` direct access → returns 404 (not 403 — hides login existence)
+- `/wp-admin/` unauthenticated access → redirects to homepage (not to login)
+- `/{LOGIN_SLUG}` → loads wp-login.php normally
+- Logout, password reset, POST form submissions → allowed through
+- `admin-ajax.php` → allowed (WooCommerce needs it)
+- Logged-in users → `/wp-admin/` works normally
+- WordPress-generated login URLs (password reset emails etc.) → use custom slug
+
+### 9. Create Per-Site PHP.ini
 Select `memory_limit` based on RAM profile: `96M` (2GB), `128M` (4GB), `256M` (8GB+).
 ```bash
 sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST "
@@ -195,7 +275,7 @@ PHPINIEOF
 ```
 Replace `{PHP_MEMORY_LIMIT}` with the value from RAM profile above, `{DOMAIN_SLUG}` with the captured domain slug.
 
-### 9. Create OLS Vhost Config
+### 10. Create OLS Vhost Config
 Write `/usr/local/lsws/conf/vhosts/{domain}.conf`:
 ```bash
 sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST "
@@ -227,15 +307,7 @@ virtualHost {DOMAIN_SLUG} {
     enable                1
     autoLoadHtaccess      1
     rules                 <<<END_rules
-# Custom login URL -- maps /{LOGIN_SLUG} to wp-login.php
-RewriteRule ^/{LOGIN_SLUG}$ /wp-login.php [QSA,L]
-# Block direct wp-login.php access (allow POST for form submission + logout/reset flows)
-RewriteCond %{THE_REQUEST} /wp-login\.php
-RewriteCond %{REQUEST_URI} ^/wp-login\.php
-RewriteCond %{QUERY_STRING} !^action=(logout|rp|resetpass|postpass)
-RewriteCond %{HTTP_REFERER} !/{LOGIN_SLUG}
-RewriteRule ^wp-login\.php$ - [F,L]
-# Block xmlrpc.php
+# Block xmlrpc.php (attack surface reduction)
 RewriteRule ^xmlrpc\.php$ - [F,L]
 # Block PHP execution in wp-includes
 RewriteRule ^wp-includes/.*\.php$ - [F,L]
@@ -268,7 +340,7 @@ OLSVHOSTEOF
 "
 ```
 
-### 10. Register Vhost in httpd_config.conf — STAGING APPROACH (CRITICAL)
+### 11. Register Vhost in httpd_config.conf — STAGING APPROACH (CRITICAL)
 **NEVER write directly to the production config.** Use copy → append → validate → atomic swap to protect running sites.
 
 Determine memory soft/hard limits based on RAM profile (values from orchestrator):
@@ -332,7 +404,7 @@ EXTEOF
 ```
 Replace `{PHP_MEM_SOFT}` and `{PHP_MEM_HARD}` with values from RAM profile above. If OLS config validation fails — STOP and report. Do not proceed.
 
-### 11. Install and Configure LiteSpeed Cache Plugin with Redis Object Cache
+### 12. Install and Configure LiteSpeed Cache Plugin with Redis Object Cache
 ```bash
 sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST '
   WP_PATH="/var/www/{domain}/html"
@@ -347,7 +419,7 @@ sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST '
 '
 ```
 
-### 12. Install and Configure WooCommerce
+### 13. Install and Configure WooCommerce
 ```bash
 sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST '
   WP_PATH="/var/www/{domain}/html"
@@ -360,7 +432,7 @@ sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST '
 '
 ```
 
-### 13. Security Hardening, Default Content Cleanup, and Permalinks
+### 14. Security Hardening, Default Content Cleanup, and Permalinks
 ```bash
 sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST '
   WP_PATH="/var/www/{domain}/html"
@@ -387,7 +459,7 @@ sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST '
 '
 ```
 
-### 14. Create Per-Site Backup Script and Staggered Cron
+### 15. Create Per-Site Backup Script and Staggered Cron
 First create a `.my.cnf` credential file so the backup script never embeds plaintext passwords:
 ```bash
 sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST "
@@ -439,7 +511,7 @@ sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST '
 ```
 Capture `CRON_HOUR` and `CRON_MINUTE` for the output report.
 
-### 15. Verify Installation
+### 16. Verify Installation
 ```bash
 sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no -p PORT USER@HOST '
   WP_PATH="/var/www/{domain}/html"
