@@ -15,9 +15,10 @@ WordPress domain review & setup agent with 4 audit skills + 4 setup skills. OLS 
 - `domain-setup-agent` — Multi-site orchestrator: runs VPS setup once, then loops WP + CF setup per domain with adaptive resource allocation
 
 ## Usage
-- **Audit:** "review domain example.com" — audits existing site, produces health report with OLS/Redis/CF cross-validation
+- **Audit:** "review domain example.com" — audits existing site, produces health report (read-only)
+- **Check & Fix:** "check setup domain example.com custom_login_slug my-admin" — audits + auto-fixes all issues (installs mu-plugin, fixes CF settings, permissions, etc.)
 - **Setup:** "setup domain example.com" — sets up new WordPress site from scratch on fresh VPS
-- **Multi-site Setup:** "setup domains site1.com, site2.com" — sets up multiple WordPress sites on same VPS with adaptive memory allocation and isolated Redis DBs
+- **Multi-site Setup:** "setup domains site1.com, site2.com" — sets up multiple sites on same VPS
 
 ## Reports
 - Audit reports go to `vps-reports/` (e.g., `domain-review-example.com-20260319.md`)

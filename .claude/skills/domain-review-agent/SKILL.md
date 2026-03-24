@@ -18,11 +18,22 @@ allowed-tools:
 Orchestrate all 3 audit skills to produce a comprehensive domain review. This is the main entry point users interact with.
 
 ## Trigger Phrases
+
+### Audit-Only Mode (read-only, produce report)
 - "review domain [domain]"
 - "check domain [domain]"
 - "audit [domain]"
 - "verify [domain] setup"
 - "is [domain] configured correctly?"
+
+### Check-and-Fix Mode (audit + auto-fix all issues)
+- "check setup domain [domain]"
+- "check setup domain [domain] custom_login_slug [slug]"
+- "fix domain [domain]"
+
+**Check-and-Fix Mode** runs all 3 audits, then **automatically fixes every issue found** via SSH. See [Step 6: Auto-Fix](#step-6-auto-fix-check-and-fix-mode-only) for details.
+
+If `custom_login_slug` is provided, the agent ensures the mu-plugin is installed with that slug. If not provided, it reads the existing `CUSTOM_LOGIN_SLUG` from wp-config.php or generates a random `login-{hex4}`.
 
 ## Step 1: Collect Credentials
 Ask user for ALL of these (use AskUserQuestion tool). NEVER save any of these to files:
@@ -39,6 +50,7 @@ Ask user for ALL of these (use AskUserQuestion tool). NEVER save any of these to
 ### Optional
 8. **WordPress install path** (auto-detected if not provided)
 9. **WordPress admin URL** (for reference only)
+10. **Custom login slug** (for check-and-fix mode — e.g., `my-admin`)
 
 ## Step 2: Verify Connectivity
 Before running audits, verify:
@@ -174,6 +186,69 @@ Priority-ordered list from ALL 3 audits:
 - [WordPress Audit](./wordpress-audit-DOMAIN-YYYYMMDD.md)
 ```
 
+## Step 6: Auto-Fix (Check-and-Fix Mode Only)
+
+**Only runs when triggered by "check setup domain" or "fix domain" phrases.** Skipped in audit-only mode.
+
+After Steps 3-5 (audit + report), iterate through ALL issues found (Critical + Warnings) and fix them automatically via SSH and Cloudflare API. Process in this order:
+
+### 6a. VPS Server Fixes (via SSH)
+For each VPS issue, run the fix command from the audit report. Common auto-fixes:
+- **Missing custom login mu-plugin:** Install `custom-login-url.php` mu-plugin (from `wordpress-site-setup` Step 8). Use the `custom_login_slug` provided by user, or read existing `CUSTOM_LOGIN_SLUG` from wp-config.php, or generate `login-$(openssl rand -hex 4)`.
+- **CUSTOM_LOGIN_SLUG not in wp-config.php:** Set it via WP-CLI: `wp config set CUSTOM_LOGIN_SLUG '{slug}' --path={WP_PATH} --allow-root`
+- **File permissions wrong:** `find {path} -type f -exec chmod 644 {} \;` + `find {path} -type d -exec chmod 755 {} \;` + `chmod 600 wp-config.php`
+- **wp-config.php missing security constants:** Set DISALLOW_FILE_EDIT, FORCE_SSL_ADMIN, WP_DEBUG=false via WP-CLI
+- **Missing backup script/cron:** Create per-site backup script + .my.cnf + staggered cron (from `wordpress-site-setup` Step 15)
+- **Redis not configured in LSCache:** Set litespeed.conf.object_kind=1, object_host, object_port, object_db_id via WP-CLI
+- **OLS config validation failure:** Run `openlitespeed -t`, show error, attempt fix
+- **fail2ban not running:** `systemctl enable fail2ban && systemctl restart fail2ban`
+- **UFW not CF-only:** Re-apply Cloudflare-only rules (from `vps-server-setup` Step 15)
+- **Outdated WordPress/plugins:** `wp core update` + `wp plugin update --all`
+
+### 6b. Cloudflare Fixes (via API)
+- **SSL not Full Strict:** `PATCH /zones/{id}/settings/ssl` → `{"value":"strict"}`
+- **Always HTTPS off:** `PATCH /zones/{id}/settings/always_use_https` → `{"value":"on"}`
+- **HSTS not enabled:** `PATCH /zones/{id}/settings/security_header` → enable
+- **HTTP/3 off:** `PATCH /zones/{id}/settings/http3` → `{"value":"on"}`
+- **Bot Fight Mode off:** Enable via API
+- **Missing WooCommerce page rules:** Create cart/checkout/my-account bypass rules
+- **Missing rate limiting:** Create wp-login.php + xmlrpc.php rules
+- **Brotli off:** Enable via API
+- **TLS < 1.2:** Set min_tls_version to 1.2
+
+### 6c. Verify Fixes
+After all fixes applied, run a quick verification:
+```bash
+# Verify mu-plugin active
+${WP_CLI} eval 'echo defined("CUSTOM_LOGIN_SLUG") ? CUSTOM_LOGIN_SLUG : "NOT_DEFINED";' --path=${WP_PATH} --allow-root
+
+# Test login URL protection
+curl -sk -o /dev/null -w "%{http_code}" https://${DOMAIN}/wp-login.php  # Should be 404
+curl -sk -o /dev/null -w "%{http_code}" https://${DOMAIN}/wp-admin/    # Should be 302 to homepage
+curl -sk -o /dev/null -w "%{http_code}" https://${DOMAIN}/${LOGIN_SLUG} # Should be 200
+
+# OLS config valid
+/usr/local/lsws/bin/openlitespeed -t
+
+# Cloudflare SSL check
+curl -sI https://${DOMAIN} | grep -i "cf-ray\|strict-transport"
+```
+
+### 6d. Report Fixes Applied
+Append to the report:
+```
+## Auto-Fix Results
+| # | Issue | Layer | Fix Applied | Result |
+|---|-------|-------|-------------|--------|
+| 1 | Missing mu-plugin | WP | Installed custom-login-url.php | OK |
+| 2 | SSL not strict | CF | Set Full Strict | OK |
+| ... | ... | ... | ... | ... |
+
+Login URL: https://{domain}/{slug}
+wp-login.php: returns 404
+wp-admin/: redirects to homepage (unauthenticated)
+```
+
 ## Important Rules
 - NEVER save credentials anywhere — keep only in conversation context
 - Credentials are single-session only
@@ -183,3 +258,5 @@ Priority-ordered list from ALL 3 audits:
 - Always cross-reference between layers — that's the value-add
 - Present fixes in priority order across all layers
 - Make all fix commands copy-paste ready
+- **Check-and-fix mode:** Auto-fix ALL issues found — do not ask for confirmation per fix. The user triggered this mode knowing fixes will be applied.
+- **Always verify** login URL protection after mu-plugin install (curl test for 404/302/200)
